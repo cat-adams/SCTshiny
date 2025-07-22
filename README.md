@@ -1,0 +1,2 @@
+# SCTshiny
+Shinyapp for SCT
