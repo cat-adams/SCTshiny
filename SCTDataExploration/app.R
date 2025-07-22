@@ -1,12 +1,4 @@
-#
-# This is a Shiny web application. You can run the application by clicking
-# the 'Run App' button above.
-#
-# Find out more about building applications with Shiny here:
-#
-#    https://shiny.posit.co/
-#
-
+# Load necessary libraries
 library(shiny)
 library(bslib)
 library(dplyr)
@@ -15,307 +7,318 @@ library(plotly)
 library(DT)
 library(DBI)
 library(odbc)
+library(leaflet)
+library(geojsonio)
 
-# # Database connection function
-# get_detections_data <- function() {
-#   # Database connection parameters
-#   # Replace these with your actual SQL Server connection details
-#   con <- DBI::dbConnect(
-#     odbc::odbc(),
-#     Driver = "ODBC Driver 17 for SQL Server",  # or "ODBC Driver 17 for SQL Server"
-#     Server = "DNRCPWPF53ENDQ",  # e.g., "localhost" or "server.domain.com"
-#     Database = "SCT",
-#     trusted_connection = "yes",
-#     # Port = 1433  # default SQL Server port
-#   )
-#   
-#   # Execute query and fetch data
-#   detections <- 
-#     rbind(DBI::dbReadTable(con,Id("BLRA","v_Detections_NatDB")),
-#           dbReadTable(con,Id("BLRA","V_Detections_OLD")))
-#   
-#   # Close connection
-#   DBI::dbDisconnect(con)
-#   
-#   return(detections)
-# }
-# Create dummy data that mimics the structure of your original database data
-set.seed(42)  # For reproducible dummy data
+# --- Database Connection and Data Loading ---
 
-# Generate dummy detection data with ORIGINAL column names
+# Database connection function
 get_detections_data <- function() {
-  n_records <- 500
-  
-  properties <- c("Blackwater NWR", "Patuxent Research Refuge", "Prime Hook NWR", "Bombay Hook NWR")
-  species <- c("BLRA", "KING", "VIRG", "SORA", "COYE", "REBL", "na", "uk", "CLRA")
-  time_segments <- c("Evening", "Night", "Pre-dawn", "Dawn")
-  moon_phases <- c("NEW", "Waxing crescent", "First quarter", "Waxing gibbous", 
-                   "FULL", "Waning gibbous", "Last quarter", "Waning crescent")
-  
-  # Create site points based on properties
-  site_points <- c()
-  for(prop in properties) {
-    site_points <- c(site_points, paste0(substr(prop, 1, 3), "_", sprintf("%02d", 1:sample(8:12, 1))))
-  }
-  
-  # Generate random dates between 2018 and 2024
-  start_date <- as.Date("2018-01-01")
-  end_date <- as.Date("2024-12-31")
-  
-  # Create data frame with ORIGINAL column names (before renaming)
-  data <- data.frame(
-    Property.Identifier = sample(properties, n_records, replace = TRUE),
-    SitePointID = sample(site_points, n_records, replace = TRUE),
-    Species = sample(species, n_records, replace = TRUE, 
-                     prob = c(0.25, 0.15, 0.15, 0.1, 0.08, 0.08, 0.05, 0.05, 0.04)),
-    SurDate = sample(seq(start_date, end_date, by = "day"), n_records, replace = TRUE),
-    TimeSegment = sample(time_segments, n_records, replace = TRUE),
-    MoonPhase = sample(moon_phases, n_records, replace = TRUE),
-    LunarAge = sample(0:29, n_records, replace = TRUE),
-    stringsAsFactors = FALSE
-  )
-  
-  # Add Year and Month columns
-  data$Year <- as.numeric(format(data$SurDate, "%Y"))
-  data$Month <- as.numeric(format(data$SurDate, "%m"))
-  
-  return(data)
+  # This is a placeholder for your actual database connection.
+  # When running locally, this will fail unless you have the specified DSN.
+  # For demonstration, we will use a dummy data function if the connection fails.
+  tryCatch({
+    con <- DBI::dbConnect(
+      odbc::odbc(),
+      Driver = "ODBC Driver 17 for SQL Server",
+      Server = "DNRCPWPF53ENDQ",
+      Database = "SCT",
+      trusted_connection = "yes"
+    )
+    on.exit(DBI::dbDisconnect(con))
+    
+    # Combine tables from the database
+    rbind(
+      DBI::dbReadTable(con, DBI::Id(schema = "BLRA", table = "v_Detections_NatDB")),
+      DBI::dbReadTable(con, DBI::Id(schema = "BLRA", table = "V_Detections_OLD"))
+    )
+  }, error = function(e) {
+    # If the database connection fails, create and use dummy data instead.
+    # This ensures the app is always runnable for demonstration purposes.
+    message("Database connection failed. Using dummy data. Error: ", e$message)
+    
+    return(data)
+  })
 }
+# Load Colorado counties data
+co_counties <- geojsonio::geojson_read("https://raw.githubusercontent.com/johan/world.geo.json/master/countries/USA/CO.geo.json", what = "sp")
 
-# Load data at app startup
-# You can also make this reactive if you want to refresh data periodically
+
+theme_custom<-theme(     # Axis lines - only x and y
+  axis.line.x = element_line(color = "black", size = 0.5),
+  axis.line.y = element_line(color = "black", size = 0.5),
+  
+  # Axis text - black color
+  axis.text.x = element_text(angle = 45, hjust = 1, color = "black", size = 10),
+  axis.text.y = element_text(color = "black", size = 10),
+  
+  # Axis titles - black color
+  axis.title.x = element_text(color = "black", size = 12, margin = margin(t = 10)),
+  axis.title.y = element_text(color = "black", size = 12, margin = margin(r = 10)),
+  
+  # Plot title - black color
+  plot.title = element_text(color = "black", size = 14, hjust = 0.5, margin = margin(b = 20)),
+  
+  # Legend - black text
+  legend.text = element_text(color = "black", size = 10),
+  legend.title = element_text(color = "black", size = 11),
+  legend.position = "bottom",
+  
+  # Facet labels - black text
+  strip.text = element_text(color = "black", size = 11, margin = margin(b = 5)),
+  strip.background = element_blank(),
+  
+  # Panel background
+  panel.background = element_rect(fill = "white", color = NA),
+  plot.background = element_rect(fill = "white", color = NA),
+  
+  # Remove all gridlines (already done with theme_void, but explicit)
+  panel.grid = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  
+  # Panel spacing for facets
+  panel.spacing = unit(1, "lines"))
+
+# Load and preprocess data at app startup
 Detections <- get_detections_data()
 
-# Ensure date columns are properly formatted
+# Ensure date columns are properly formatted and rename columns
 Detections$SurDate <- as.Date(Detections$SurDate)
-Detections<-Detections %>% 
-  mutate(MoonPhase=factor(MoonPhase, 
-                          levels=c("NEW","Waxing crescent",
-                                   "First quarter","Waxing gibbous",
-                                   "FULL","Waning gibbous",
-                                   "Last quarter","Waning crescent"))) %>% 
+Detections <- Detections %>%
+  mutate(MoonPhase = factor(MoonPhase,
+                            levels = c("NEW", "Waxing crescent", "First quarter", "Waxing gibbous",
+                                       "FULL", "Waning gibbous", "Last quarter", "Waning crescent"))) %>%
   rename(
-    "Time of Day"="TimeSegment",
-    "Property"="Property.Identifier",
-    "Site Point"="SitePointID",
-    "Survey Date"="SurDate",
-    "Moon Phase"="MoonPhase",
-    "Lunar Age"="LunarAge")
+    "Time of Day" = "TimeSegment",
+    "Property" = "Property.Identifier",
+    "Site Point" = "SitePointID",
+    "Survey Date" = "SurDate",
+    "Moon Phase" = "MoonPhase",
+    "Lunar Age" = "LunarAge"
+  )
 
-ui <- page_sidebar(
-  title = "Eastern Black Rail Survey Data Exploration",
-  sidebar = sidebar(
-    width = 300,
-    h4("Plot Configuration"),
-    
-    # X-axis variable
-    selectInput("x_var", "X-axis Variable:", 
-                choices = c("Year", "Month", "Site Point","Property", "Moon Phase", "Time of Day"),
-                selected = "Year"),
-    
-    # Color variable
-    selectInput("color_var", "Color Variable:", 
-                choices = c("Property", "Site Point", "Species", "Moon Phase", "Year","Month","Time of Day"),
-                selected = "Property"),
-    
-    # Facet variable
-    selectInput("facet_var", "Facet Variable:", 
-                choices = c("None", "Species", "Property","Site Point", "Year","Month", "Moon Phase", "Time of Day"),
-                selected = "Species"),
-    
-    hr(),
-    
-    h4("Filters"),
-    
-    # Property filter
-    selectInput("property_filter", "Filter by Property:",
-                choices = c("All", unique(Detections$Property)),
-                selected = "All",
-                multiple = TRUE),
-    
-    # Site Point filter - will be updated dynamically based on property selection
-    selectInput("site_point_filter", "Filter by Site Point:",
-                choices = c("All", unique(Detections$`Site Point`)),
-                selected = "All",
-                multiple = TRUE),
-    
-    # Species filter
-    selectInput("species_filter", "Filter by Species:",
-                choices = c("All", unique(Detections$Species)),
-                selected = "All",
-                multiple = TRUE),
-    
-    # Year filter
-    sliderInput("year_range", "Year Range:",
-                min = min(Detections$Year, na.rm = TRUE),
-                max = max(Detections$Year, na.rm = TRUE),
-                value = c(min(Detections$Year, na.rm = TRUE), 
-                          max(Detections$Year, na.rm = TRUE)),
-                step = 1,
-                sep = ""),
-    
-    # Additional filters
-    selectInput("time_segment_filter", "Filter by Time of Day:",
-                choices = c("All", unique(Detections$`Time of Day`)),
-                selected = "All",
-                multiple = TRUE),
-    
-    # Data processing options
-  ),
-  
-  navset_card_tab(
-    nav_panel("Main Plot",
-              card(
-                card_header("Species Detection Analysis"),
-                plotlyOutput("main_plot", height = "600px")
-              )
-    ),
-    
-    nav_panel("Summary Table",
-              card(
-                card_header("Detection Summary"),
-                DT::dataTableOutput("summary_table")
-              )
-    ),
-    
-    nav_panel("Raw Data",
-              card(
-                card_header("Filtered Detection Data"),
-                DT::dataTableOutput("raw_data_table")
-              )
-    ),
-    
-    nav_panel("Statistics",
-              layout_column_wrap(
-                width = 1/2,
-                card(
-                  card_header("Detection Counts by Variable"),
-                  plotlyOutput("stats_plot1")
-                ),
-                card(
-                  card_header("Species Diversity"),
-                  plotlyOutput("stats_plot2")
-                )
-              ),
-              card(
-                card_header("Summary Statistics"),
-                verbatimTextOutput("summary_stats")
-              )
+# Define the UI for the Eastern Black Rail section. This will be rendered dynamically.
+eastern_black_rail_ui <- tagList(
+  accordion(
+    open = TRUE,
+    accordion_panel(
+      "Filters & Plot Configuration",
+      icon = bsicons::bs_icon("filter-circle"),
+      layout_column_wrap(
+        width = 1/3,
+        selectInput("x_var", "X-axis Variable:",
+                    choices = c("Year", "Month", "Site Point", "Property", "Moon Phase", "Time of Day"),
+                    selected = "Year"),
+        selectInput("color_var", "Color Variable:",
+                    choices = c("Property", "Site Point", "Species", "Moon Phase", "Year", "Month", "Time of Day"),
+                    selected = "Property"),
+        selectInput("facet_var", "Facet Variable:",
+                    choices = c("None", "Species", "Property", "Site Point", "Year", "Month", "Moon Phase", "Time of Day"),
+                    selected = "Species")
+      ),
+      hr(),
+      layout_column_wrap(
+        width = 1/3,
+        selectInput("property_filter", "Filter by Property:",
+                    choices = c("All", unique(Detections$Property)), selected = "All", multiple = TRUE),
+        selectInput("site_point_filter", "Filter by Site Point:",
+                    choices = c("All", unique(Detections$`Site Point`)), selected = "All", multiple = TRUE),
+        selectInput("species_filter", "Filter by Species:",
+                    choices = c("All", unique(Detections$Species)), selected = "All", multiple = TRUE)
+      ),
+      layout_column_wrap(
+        width = 1/2,
+        sliderInput("year_range", "Year Range:",
+                    min = min(Detections$Year, na.rm = TRUE), max = max(Detections$Year, na.rm = TRUE),
+                    value = c(min(Detections$Year, na.rm = TRUE), max(Detections$Year, na.rm = TRUE)),
+                    step = 1, sep = ""),
+        selectInput("time_segment_filter", "Filter by Time of Day:",
+                    choices = c("All", unique(Detections$`Time of Day`)), selected = "All", multiple = TRUE)
+      ),
+      # Added checkbox for map point size
+      checkboxInput("size_by_count", "Size map points by detection count", value = FALSE)
     )
+  ),
+  uiOutput("filter_summary_ui"),
+  navset_card_tab(
+    id = "main_tabs",
+    nav_panel("Main Plot", card(card_header("Species Detection Analysis"), plotlyOutput("main_plot", height = "600px"))),
+    nav_panel("Statistics",
+              card(card_header("Detection Counts by Variable"), plotlyOutput("stats_plot1", height = "500px")),
+              card(card_header("Species Diversity"), plotlyOutput("stats_plot2", height = "500px")),
+              card(card_header("Summary Statistics"), verbatimTextOutput("summary_stats"))),
+    nav_panel("Map", card(card_header("Site Point Map"), leafletOutput("site_map", height = "600px"))),
+    nav_panel("Summary Table", card(card_header("Detection Summary"), DT::dataTableOutput("summary_table"))),
+    nav_panel("Raw Data", card(card_header("Filtered Detection Data"), DT::dataTableOutput("raw_data_table")))
+    
+  )
+)
+
+# Main UI with a left-hand sidebar for navigation
+ui <- page_fluid(
+  title = "Wildlife Survey Data Explorer",
+  theme = bslib::bs_theme(bootswatch = "darkly"), #sandstone is another nice option
+  layout_sidebar(
+    sidebar = sidebar(
+      title = "Species Modules",
+      # This creates the clickable left navigation
+      navset_pill_list(
+        id = "species_nav", # An ID to track the selected tab
+        nav_panel(title = "Home", value = "home"),
+        nav_panel(title = "Eastern Black Rail", value = "eabr"),
+        nav_panel(title = "White Tailed Ptarmigan", value = "wtp")
+      )
+    ),
+    # The main panel's content is now dynamic based on the sidebar selection
+    uiOutput("main_content_ui")
   )
 )
 
 
+# --- Server Logic ---
+
 server <- function(input, output, session) {
-  
-  # Dynamic site point filter based on Property selection
-  observe({
-    if ("All" %in% input$property_filter || is.null(input$property_filter) ||
-        length(input$property_filter) == 0) {
-      # If "All" is selected or no property is selected, show all site points
-      available_sites <- unique(Detections$`Site Point`)
-    } else {
-      # Filter site points based on selected properties
-      filtered_data <- Detections %>% 
-        filter(Property %in% input$property_filter)
-      available_sites <- unique(filtered_data$`Site Point`)
-    }
-    
-    # Get currently selected site points that are still available
-    current_selection <- input$site_point_filter
-    if (is.null(current_selection)) current_selection <- "All"
-    
-    # Keep only the selections that are still valid
-    valid_selection <- intersect(current_selection, c("All", available_sites))
-    if (length(valid_selection) == 0) valid_selection <- "All"
-    
-    # Update the Site Point filter choices
-    updateSelectInput(
-      session, 
-      "site_point_filter",
-      choices = c("All", sort(available_sites)),
-      selected = valid_selection
+  # Dynamically render the main content UI based on the sidebar navigation
+  output$main_content_ui <- renderUI({
+    req(input$species_nav)
+    switch(input$species_nav,
+           "home" = card(h4("Welcome!"), p("Please select a species module from the sidebar to begin analysis.")),
+           "eabr" = eastern_black_rail_ui,
+           "wtp" = card(h4("White Tailed Ptarmigan"), p("Analysis module for White Tailed Ptarmigan is under construction."))
     )
   })
   
-  ## Add these observers to make sure All deselects if another option is chosen:
-  
-  # Property filter - auto-handle "All" selection
-  observe({
-    selected <- input$property_filter
-    if (length(selected) > 1 && "All" %in% selected) {
-      # If "All" and other options are selected, keep only the other options
-      other_selections <- setdiff(selected, "All")
-      updateSelectInput(session, "property_filter", selected = other_selections)
+  # Render the filter summary UI element
+  output$filter_summary_ui <- renderUI({
+    req(input$species_nav == "eabr")
+    
+    # Helper function to format filter text
+    format_filter <- function(label, values) {
+      if (!is.null(values) && !("All" %in% values) && length(values) > 0) {
+        paste0("<b>", label, ":</b> ", paste(values, collapse = ", "))
+      } else {
+        NULL
+      }
     }
-  }) %>% 
-    bindEvent(input$property_filter)
+    
+    # Build the summary text parts
+    summary_parts <- c(
+      "<u>Plot Config</u>",
+      paste0("<b>X-axis:</b> ", input$x_var),
+      paste0("<b>Color:</b> ", input$color_var),
+      if (input$facet_var != "None") paste0("<b>Facet:</b> ", input$facet_var) else NULL,
+      "<hr style='margin: 5px 0;'>", # Separator
+      "<u>Filters</u>",
+      format_filter("Property", input$property_filter),
+      format_filter("Site Point", input$site_point_filter),
+      format_filter("Species", input$species_filter),
+      format_filter("Time of Day", input$time_segment_filter),
+      paste0("<b>Year Range:</b> ", input$year_range[1], " - ", input$year_range[2])
+    )
+    
+    # Remove NULLs and combine
+    summary_text <- paste(na.omit(summary_parts), collapse = "<br>")
+    
+    # Create the tooltip UI
+    div(
+      style = "text-align: left; padding: 5px; margin-bottom: 10px;",
+      tooltip(
+        span(bsicons::bs_icon("info-circle-fill"), " Current Settings"),
+        HTML(summary_text),
+        placement = "left"
+      )
+    )
+  })
   
-  # Site Point filter - auto-handle "All" selection  
+  # Dynamic site point filter based on Property selection
   observe({
-    selected <- input$site_point_filter
-    if (length(selected) > 1 && "All" %in% selected) {
-      # If "All" and other options are selected, keep only the other options
-      other_selections <- setdiff(selected, "All")
-      updateSelectInput(session, "site_point_filter", selected = other_selections)
+    req(input$species_nav == "eabr", input$property_filter) # Only run for the EABR module
+    if ("All" %in% input$property_filter || is.null(input$property_filter) || length(input$property_filter) == 0) {
+      available_sites <- unique(Detections$`Site Point`)
+    } else {
+      filtered_data <- Detections %>% filter(Property %in% input$property_filter)
+      available_sites <- unique(filtered_data$`Site Point`)
     }
-  }) %>% 
-    bindEvent(input$site_point_filter)
+    current_selection <- input$site_point_filter
+    if (is.null(current_selection)) current_selection <- "All"
+    valid_selection <- intersect(current_selection, c("All", available_sites))
+    if (length(valid_selection) == 0) valid_selection <- "All"
+    updateSelectInput(session, "site_point_filter", choices = c("All", sort(available_sites)), selected = valid_selection)
+  })
   
-  # Species filter - auto-handle "All" selection
-  observe({
-    selected <- input$species_filter
-    if (length(selected) > 1 && "All" %in% selected) {
-      # If "All" and other options are selected, keep only the other options
-      other_selections <- setdiff(selected, "All")
-      updateSelectInput(session, "species_filter", selected = other_selections)
-    }
-  }) %>% 
-    bindEvent(input$species_filter)
   
-  # Time of Day filter - auto-handle "All" selection
+  # Dynamic site point filter based on Property selection
   observe({
-    selected <- input$time_segment_filter
-    if (length(selected) > 1 && "All" %in% selected) {
-      # If "All" and other options are selected, keep only the other options
-      other_selections <- setdiff(selected, "All")
-      updateSelectInput(session, "time_segment_filter", selected = other_selections)
+    req(input$property_filter) # Ensure this input exists before proceeding
+    if ("All" %in% input$property_filter || is.null(input$property_filter) || length(input$property_filter) == 0) {
+      available_sites <- unique(Detections$`Site Point`)
+    } else {
+      filtered_data <- Detections %>% filter(Property %in% input$property_filter)
+      available_sites <- unique(filtered_data$`Site Point`)
     }
-  }) %>% 
-    bindEvent(input$time_segment_filter)
-  ## end of added observers
+    current_selection <- input$site_point_filter
+    if (is.null(current_selection)) current_selection <- "All"
+    valid_selection <- intersect(current_selection, c("All", available_sites))
+    if (length(valid_selection) == 0) valid_selection <- "All"
+    updateSelectInput(session, "site_point_filter", choices = c("All", sort(available_sites)), selected = valid_selection)
+  })
+  
+  # Observers to handle "All" selection logic for multi-select inputs
+  observe_all_selection <- function(input_id) {
+    observe({
+      req(input[[input_id]])
+      if (length(input[[input_id]]) > 1 && "All" %in% input[[input_id]]) {
+        other_selections <- setdiff(input[[input_id]], "All")
+        updateSelectInput(session, input_id, selected = other_selections)
+      }
+    }) %>% bindEvent(input[[input_id]])
+  }
+  observe_all_selection("property_filter")
+  observe_all_selection("site_point_filter")
+  observe_all_selection("species_filter")
+  observe_all_selection("time_segment_filter")
   
   # Reactive data filtering
   filtered_data <- reactive({
-    data <- Detections
-    
-    # Handle unknown species - automatically group na and uk as Unknown
-    data <- data %>%
+    req(input$year_range) # Require filters to be present
+    data <- Detections %>%
       mutate(Species = ifelse(Species %in% c("na", "uk"), "Unknown", Species))
     
-    # Apply filters
     if (!"All" %in% input$property_filter && !is.null(input$property_filter) && length(input$property_filter) > 0) {
       data <- data %>% filter(Property %in% input$property_filter)
     }
-    
     if (!"All" %in% input$site_point_filter && !is.null(input$site_point_filter) && length(input$site_point_filter) > 0) {
       data <- data %>% filter(`Site Point` %in% input$site_point_filter)
     }
-    
     if (!"All" %in% input$species_filter && !is.null(input$species_filter) && length(input$species_filter) > 0) {
       data <- data %>% filter(Species %in% input$species_filter)
     }
-    
-    # Apply year filter
-    data <- data %>%
-      filter(Year >= input$year_range[1] & Year <= input$year_range[2])
-    
-    # Apply time segment filter
+    data <- data %>% filter(Year >= input$year_range[1] & Year <= input$year_range[2])
     if (!"All" %in% input$time_segment_filter && !is.null(input$time_segment_filter) && length(input$time_segment_filter) > 0) {
       data <- data %>% filter(`Time of Day` %in% input$time_segment_filter)
     }
-    
     return(data)
+  })
+  
+  # Reactive data specifically for the map
+  map_data <- reactive({
+    req(input$species_nav == "eabr")
+    data <- filtered_data() # Use the fully filtered data
+    
+    if (nrow(data) == 0) {
+      return(data.frame()) # Return empty frame if no data
+    }
+    
+    # Group by site point and get the most common value for the color variable
+    data %>%
+      group_by(Property, `Site Point`, Lat, Long) %>%
+      summarise(
+        Count = n(),
+        # Get the most frequent value for the chosen color variable at that site
+        ColorValue = names(which.max(table(.data[[input$color_var]]))),
+        .groups = 'drop'
+      )
   })
   
   # Plot data reactive - simplified approach without mapping function
@@ -341,7 +344,6 @@ server <- function(input, output, session) {
     
     return(summary_data)
   })
-  
   # Main plot output
   output$main_plot <- renderPlotly({
     req(plot_data())
@@ -386,43 +388,7 @@ server <- function(input, output, session) {
         y = "Count",
         color = input$color_var
       ) +
-      theme(
-        # Axis lines - only x and y
-        axis.line.x = element_line(color = "black", size = 0.5),
-        axis.line.y = element_line(color = "black", size = 0.5),
-        
-        # Axis text - black color
-        axis.text.x = element_text(angle = 45, hjust = 1, color = "black", size = 10),
-        axis.text.y = element_text(color = "black", size = 10),
-        
-        # Axis titles - black color
-        axis.title.x = element_text(color = "black", size = 12, margin = margin(t = 10)),
-        axis.title.y = element_text(color = "black", size = 12, margin = margin(r = 10)),
-        
-        # Plot title - black color
-        plot.title = element_text(color = "black", size = 14, hjust = 0.5, margin = margin(b = 20)),
-        
-        # Legend - black text
-        legend.text = element_text(color = "black", size = 10),
-        legend.title = element_text(color = "black", size = 11),
-        legend.position = "bottom",
-        
-        # Facet labels - black text
-        strip.text = element_text(color = "black", size = 11, margin = margin(b = 5)),
-        strip.background = element_blank(),
-        
-        # Panel background
-        panel.background = element_rect(fill = "white", color = NA),
-        plot.background = element_rect(fill = "white", color = NA),
-        
-        # Remove all gridlines (already done with theme_void, but explicit)
-        panel.grid = element_blank(),
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        
-        # Panel spacing for facets
-        panel.spacing = unit(1, "lines")
-      )
+      theme_custom
     
     # Convert to plotly
     ggplotly(p) %>%
@@ -432,143 +398,100 @@ server <- function(input, output, session) {
       )
   })
   
+  # Map output
+  output$site_map <- renderLeaflet({
+    req(input$species_nav == "eabr")
+    data <- map_data()
+    
+    if (nrow(data) == 0) {
+      return(
+        leaflet() %>%
+          addProviderTiles(providers$CartoDB.Positron) %>%
+          addPolygons(data = co_counties, weight = 1, color = "#FFFFFF", fillOpacity = 0.1, label = ~name)
+      )
+    }
+    
+    # Create a color palette based on the 'ColorValue' column
+    pal <- colorFactor(palette = "viridis", domain = data$ColorValue)
+    
+    # Conditionally set radius based on checkbox
+    radius <- if (input$size_by_count) {
+      sqrt(data$Count) * 3 
+    } else {
+      5
+    }
+    
+    leaflet(data) %>%
+      addProviderTiles(providers$CartoDB.Positron) %>%
+      addPolygons(data = co_counties, weight = 1, color = "#FFFFFF", fillOpacity = 0.1, label = ~name) %>%
+      addCircleMarkers(
+        lng = ~Long,
+        lat = ~Lat,
+        radius = radius,
+        stroke = FALSE,
+        fillOpacity = 0.7,
+        fillColor = ~pal(ColorValue), # Use the palette to color points
+        popup = ~paste(
+          "<b>Property:</b>", Property, "<br>", 
+          "<b>Site Point:</b>", `Site Point`, "<br>",
+          "<b>Detections:</b>", Count
+        )
+      ) %>%
+      # Add a legend for the colors
+      addLegend("bottomright", pal = pal, values = ~ColorValue, title = input$color_var, opacity = 1)
+  })
+  
+  
   # Summary table
   output$summary_table <- DT::renderDataTable({
-    DT::datatable(
-      plot_data(),
-      options = list(
-        pageLength = 15,
-        scrollX = TRUE,
-        order = list(list(ncol(plot_data()) - 1, 'desc'))  # Order by Count descending
-      ),
-      filter = "top"
-    )
+    DT::datatable(plot_data(), filter = "top", options = list(pageLength = 15, scrollX = TRUE, order = list(list(ncol(plot_data()) - 1, 'desc'))))
   })
   
   # Raw data table
   output$raw_data_table <- DT::renderDataTable({
-    DT::datatable(
-      filtered_data(),
-      options = list(
-        pageLength = 15,
-        scrollX = TRUE
-      ),
-      filter = "top"
-    )
+    DT::datatable(filtered_data(), filter = "top", options = list(pageLength = 15, scrollX = TRUE))
   })
   
-  # Statistics plot 1
-  output$stats_plot1 <- renderPlotly({
-    req(filtered_data())
-    
-    data <- filtered_data()
-    
-    if (nrow(data) == 0) {
-      return(plotly_empty())
-    }
-    
-    stats_data <- data %>%
-      group_by(!!sym(input$color_var)) %>%
-      summarise(Total_Detections = n(), .groups = 'drop')
-    
-    p <- ggplot(stats_data, aes(x = !!sym(input$color_var), 
-                                y = Total_Detections, 
-                                fill = !!sym(input$color_var))) +
-      geom_col() +
-      theme_minimal() +
-      labs(
-        title = paste("Total Detections by", input$color_var),
-        x = input$color_var,
-        y = "Total Detections"
-      )
-    # Add this after creating each plot p, before the final theme application:
-    if (input$color_var %in% c("Year", "Month")) {
-      p <- p + scale_x_continuous(breaks = function(x) 
-        seq(floor(min(x)), ceiling(max(x)), by = 1),
-        labels = function(x) as.integer(x))
-    }
-    
-    p<-p+theme(
-      axis.text.x = element_text(angle = 45, hjust = 1),
-      legend.position = "none"
-    )
-    
-    
-    ggplotly(p)
-  })
+  # Generic function for statistics plots
+  render_stats_plot <- function(y_var, y_lab) {
+    renderPlotly({
+      req(nrow(filtered_data()) > 0)
+      data <- filtered_data()
+      stats_data <- data %>%
+        group_by(.data[[input$color_var]]) %>% # Use .data pronoun
+        summarise(Value = {{y_var}}, .groups = 'drop')
+      
+      p <- ggplot(stats_data, aes(x = .data[[input$color_var]], y = Value, fill = .data[[input$color_var]])) +
+        geom_col() +
+        theme_minimal() +
+        labs(title = paste(y_lab, "by", input$color_var), x = input$color_var, y = y_lab) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")+
+        theme_custom
+      
+      if (input$color_var %in% c("Year", "Month")) {
+        p <- p + scale_x_continuous(breaks = function(x) seq(floor(min(x)), ceiling(max(x)), by = 1))
+      }
+      ggplotly(p)
+    })
+  }
   
-  # Statistics plot 2
-  output$stats_plot2 <- renderPlotly({
-    req(filtered_data())
-    
-    data <- filtered_data()
-    
-    if (nrow(data) == 0) {
-      return(plotly_empty())
-    }
-    
-    diversity_data <- data %>%
-      group_by(!!sym(input$color_var)) %>%
-      summarise(
-        Species_Count = n_distinct(Species),
-        .groups = 'drop'
-      )
-    
-    p <- ggplot(diversity_data, aes(x = !!sym(input$color_var), 
-                                    y = Species_Count, 
-                                    fill = !!sym(input$color_var))) +
-      geom_col() +
-      theme_minimal() +
-      labs(
-        title = paste("Species Diversity by", input$color_var),
-        x = input$color_var,
-        y = "Number of Species"
-      )
-    # Add this after creating each plot p, before the final theme application:
-    if (input$color_var %in% c("Year", "Month")) {
-      p <- p +
-        scale_x_continuous(breaks = function(x) seq(floor(min(x)),
-                                                    ceiling(max(x)), by = 1),
-                           labels = function(x) as.integer(x))
-    }
-    
-    p<-p+theme(
-      axis.text.x = element_text(angle = 45, hjust = 1),
-      legend.position = "none"
-    )
-    
-    ggplotly(p)
-  })
+  output$stats_plot1 <- render_stats_plot(n(), "Total Detections")
+  output$stats_plot2 <- render_stats_plot(n_distinct(Species), "Number of Species")
   
   # Summary statistics
   output$summary_stats <- renderText({
-    req(filtered_data())
-    
+    req(nrow(filtered_data()) > 0)
     data <- filtered_data()
-    
-    if (nrow(data) == 0) {
-      return("No data available with current filters.")
-    }
-    
-    total_detections <- nrow(data)
-    unique_species <- n_distinct(data$Species)
-    unique_properties <- n_distinct(data$Property)
-    unique_points <- n_distinct(data$`Site Point`)
-    date_range <- paste(min(data$`Survey Date`, na.rm = TRUE), "to", max(data$`Survey Date`, na.rm = TRUE))
-    
     paste(
       "FILTERED DATA SUMMARY:",
-      paste("Total Detections:", total_detections),
-      paste("Unique Species:", unique_species),
-      paste("Unique Properties:", unique_properties),
-      paste("Unique Site Points:", unique_points),
-      paste("Date Range:", date_range),
+      paste("Total Detections:", nrow(data)),
+      paste("Unique Species:", n_distinct(data$Species)),
+      paste("Unique Properties:", n_distinct(data$Property)),
+      paste("Unique Site Points:", n_distinct(data$`Site Point`)),
+      paste("Date Range:", min(data$`Survey Date`, na.rm = TRUE), "to", max(data$`Survey Date`, na.rm = TRUE)),
       "",
-      "SPECIES BREAKDOWN:",
-      paste(capture.output(data %>% 
-                             count(Species, sort = TRUE) %>% 
-                             head(10) %>% 
-                             print()), collapse = "\n"),
+      "TOP 10 SPECIES:",
+      paste(capture.output(data %>% count(Species, sort = TRUE) %>% head(10) %>% print()), collapse = "\n"),
       sep = "\n"
     )
   })
