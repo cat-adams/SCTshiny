@@ -7,10 +7,13 @@ library(plotly)
 library(DT)
 library(DBI)
 library(odbc)
-library(leaflet)
-library(geojsonio)
-library(shinymanager) # For authentication
-library(RSQLite)      # For the user database
+library(leaflet)         # for map
+library(geojsonio)       # for downloading county lines
+library(shinymanager)    # For authentication
+library(RSQLite)         # For the user database
+library(shinyjs)         # For dynamic UI features like disabling inputs
+library(shinycssloaders) # For loading spinners
+library(ggthemes)        # For plot themes
 
 # --- User Authentication and Database Setup ---
 
@@ -171,7 +174,7 @@ theme_custom <- theme(
   axis.text.x = element_text(angle = 45, hjust = 1, color = "black", size = 10),
   axis.text.y = element_text(color = "black", size = 10),
   axis.title.x = element_text(color = "black", size = 12, margin = margin(t = 10)),
-  axis.title.y = element_text(color = "black", size = 12, margin = margin(r = 10)),
+  axis.title.y = element_text(color = "black", size = 12, margin = margin(r = 10), angle=90),
   plot.title = element_text(color = "black", size = 14, hjust = 0.5, margin = margin(b = 20)),
   legend.text = element_text(color = "black", size = 10),
   legend.title = element_text(color = "black", size = 11),
@@ -183,7 +186,8 @@ theme_custom <- theme(
   panel.grid = element_blank(),
   panel.grid.major = element_blank(),
   panel.grid.minor = element_blank(),
-  panel.spacing = unit(1, "lines")
+  panel.spacing = unit(1, "lines"),
+  plot.margin = margin(t = 10, r = 10, b = 10, l = 20, unit = "pt")
 )
 
 # Load and preprocess data at app startup
@@ -220,10 +224,10 @@ eastern_black_rail_ui <- tagList(
                     selected = "Year"),
         selectInput("color_var", "Color Variable:",
                     choices = c("Property", "Site Point", "Species", "Moon Phase", "Year", "Month", "Time of Day"),
-                    selected = "Property"),
+                    selected = "Site Point"),
         selectInput("facet_var", "Facet Variable:",
                     choices = c("None", "Species", "Property", "Site Point", "Year", "Month", "Moon Phase", "Time of Day"),
-                    selected = "Species")
+                    selected = "Property")
       ),
       hr(),
       layout_column_wrap(
@@ -233,7 +237,7 @@ eastern_black_rail_ui <- tagList(
         selectInput("site_point_filter", "Filter by Site Point:",
                     choices = c("All", unique(Detections$`Site Point`)), selected = "All", multiple = TRUE),
         selectInput("species_filter", "Filter by Species:",
-                    choices = c("All", unique(Detections$Species)), selected = "All", multiple = TRUE)
+                    choices = c("All", unique(Detections$Species)), selected = "BLRA", multiple = TRUE)
       ),
       layout_column_wrap(
         width = 1/2,
@@ -244,21 +248,43 @@ eastern_black_rail_ui <- tagList(
         selectInput("time_segment_filter", "Filter by Time of Day:",
                     choices = c("All", unique(Detections$`Time of Day`)), selected = "All", multiple = TRUE)
       ),
-      # Added checkbox for map point size
-      checkboxInput("size_by_count", "Size map points by detection count", value = FALSE)
+      # *** NEW ***: Added controls for map points and plot legends
+      checkboxInput("size_by_count", "Size map points by detection count", value = FALSE),
+      checkboxInput("toggle_legend", "Show Plot Legends", value = TRUE)
     )
   ),
   uiOutput("filter_summary_ui"),
+  # tool tip with current filters  
+  div(
+    style = "margin-bottom: 20px; text-align: left;",
+    bslib::popover(
+      trigger = tagList(bsicons::bs_icon("info-circle-fill"), "Current Filters"),
+      title = "Active Plot & Map Settings",
+      verbatimTextOutput("current_filters_summary")
+    )
+  ),
   navset_card_tab(
     id = "main_tabs",
-    nav_panel("Main Plot", card(card_header("Species Detection Analysis"), plotlyOutput("main_plot", height = "600px"))),
+    nav_panel("Main Plot", 
+              card(
+                # *** NEW ***: Added an "Enlarge" button to the card header
+                card_header("Species Detection Analysis",
+                            actionButton("popout_main_plot", "Enlarge", icon = icon("expand"), class = "btn-sm float-end")),
+                withSpinner(plotlyOutput("main_plot", height = "600px"))
+              )),
     nav_panel("Statistics",
-              card(card_header("Detection Counts by Variable"), plotlyOutput("stats_plot1", height = "500px")),
-              card(card_header("Species Diversity"), plotlyOutput("stats_plot2", height = "500px")),
+              # *** NEW ***: Added an "Enlarge" button to the card header
+              card(card_header("Detection Counts by Variable",
+                               actionButton("popout_stats1", "Enlarge", icon = icon("expand"), class = "btn-sm float-end")), 
+                   withSpinner(plotlyOutput("stats_plot1", height = "500px"))),
+              # *** NEW ***: Added an "Enlarge" button to the card header
+              card(card_header("Species Diversity",
+                               actionButton("popout_stats2", "Enlarge", icon = icon("expand"), class = "btn-sm float-end")), 
+                   withSpinner(plotlyOutput("stats_plot2", height = "500px"))),
               card(card_header("Summary Statistics"), verbatimTextOutput("summary_stats"))),
-    nav_panel("Map", card(card_header("Site Point Map"), leafletOutput("site_map", height = "600px"))),
-    nav_panel("Summary Table", card(card_header("Detection Summary"), DT::dataTableOutput("summary_table"))),
-    nav_panel("Raw Data", card(card_header("Filtered Detection Data"), DT::dataTableOutput("raw_data_table")))
+    nav_panel("Map", card(card_header("Site Point Map"), withSpinner(leafletOutput("site_map", height = "600px")))),
+    nav_panel("Summary Table", card(card_header("Detection Summary"), withSpinner(DT::dataTableOutput("summary_table")))),
+    nav_panel("Raw Data", card(card_header("Filtered Detection Data"), withSpinner(DT::dataTableOutput("raw_data_table"))))
     
   )
 )
@@ -287,6 +313,7 @@ home_ui <- tagList(
       ),
       navset_tab(
         nav_panel("User Management", uiOutput("admin_user_management_ui")),
+        # This is now a dynamic UI element rendered from the server
         nav_panel("Permission Management", uiOutput("admin_permission_management_ui"))
       )
     )
@@ -310,8 +337,20 @@ ui_main <- page_sidebar(
 )
 
 
-# Wrap the main UI with the authentication layer
-ui <- secure_app(ui_main, choose_language = FALSE)
+# Wrap the main UI with the authentication layer and add shinyjs
+ui <- secure_app(
+  tagList(
+    tags$head(
+      tags$style(HTML("
+        .modal-xl { max-width: 95%; }
+        .modal-l { max-width: 80%; }
+      "))
+    ),
+    shinyjs::useShinyjs(), # Initialize shinyjs
+    ui_main
+  ),
+  choose_language = FALSE
+)
 
 
 # --- Server Logic ---
@@ -430,18 +469,44 @@ server <- function(input, output, session) {
     )
   })
   
-  # Permission Management UI
+  # **NEW**: Dynamic Permission Management UI
   output$admin_permission_management_ui <- renderUI({
+    req(user_info$all_users) # Ensure user list is loaded
+    
+    # Get the admin status of the currently selected user to set the checkbox default
+    selected_user_is_admin <- if (!is.null(input$permission_user) && input$permission_user %in% user_info$all_users$username) {
+      user_info$all_users %>%
+        filter(username == input$permission_user) %>%
+        pull(is_admin) %>%
+        as.logical()
+    } else {
+      FALSE
+    }
+    
     tagList(
-      h5("Manage Module Permissions"),
-      selectInput("permission_user", "Select User:", choices = user_info$all_users$username),
-      checkboxInput("permission_is_admin", "Make Admin?", value = FALSE),
-      hr(), # Optional separator
-      checkboxGroupInput("permission_modules", "Assign Modules:",
+      h5("Manage User Role & Permissions"),
+      fluidRow(
+        column(6,
+               selectInput("permission_user", "Select User:", choices = user_info$all_users$username, selected = input$permission_user)
+        ),
+        column(6,
+               checkboxInput("permission_is_admin", "Make Admin?", value = selected_user_is_admin)
+        )
+      ),
+      hr(),
+      
+      checkboxGroupInput("permission_modules", "Assign Modules (for Standard Users):",
                          choices = c("Eastern Black Rail" = "eabr", "White Tailed Ptarmigan" = "wtp")),
-      actionButton("update_permissions_btn", "Update Permissions", icon = icon("save"))
+      # Add a helper message for clarity
+      conditionalPanel(
+        condition = "input.permission_is_admin == true",
+        tags$p(tags$i("Admins have access to all modules automatically."), style = "color: #6c757d;")
+      ),
+      br(),
+      actionButton("update_permissions_btn", "Update User", icon = icon("save"))
     )
   })
+  
   
   # --- Server-side logic for Home Tab buttons ---
   
@@ -523,22 +588,28 @@ server <- function(input, output, session) {
     user_info$all_users <- dbGetQuery(dbConnect(SQLite(), db_path), "SELECT username, is_admin FROM user_credentials ORDER BY username")
   })
   
-  # Handle permission updates
+  # Handle permission updates based on new dynamic UI
   observeEvent(input$update_permissions_btn, {
     req(input$permission_user)
     
-    # Update module permissions
-    success_perms <- update_permissions(input$permission_user, input$permission_modules)
-    
-    # Update the user's admin status
+    # Update the user's admin status first
+    is_admin_flag <- as.integer(input$permission_is_admin)
     con <- dbConnect(SQLite(), db_path)
-    dbExecute(con, "UPDATE user_credentials SET is_admin = ? WHERE username = ?", 
-              params = list(as.integer(input$permission_is_admin), input$permission_user))
+    dbExecute(con, "UPDATE user_credentials SET is_admin = ? WHERE username = ?",
+              params = list(is_admin_flag, input$permission_user))
     dbDisconnect(con)
+    
+    # If the user is an admin, clear their specific module permissions.
+    # Otherwise, update their permissions based on the checkbox group.
+    if (input$permission_is_admin) {
+      update_permissions(input$permission_user, character(0)) # Clear permissions for admin
+    } else {
+      update_permissions(input$permission_user, input$permission_modules)
+    }
     
     showNotification(paste("Permissions and role updated for", input$permission_user), type = "message")
     
-    # Refresh the user list to reflect the role change
+    # Refresh the user list data to reflect the role change immediately
     user_info$all_users <- dbGetQuery(dbConnect(SQLite(), db_path), "SELECT username, is_admin FROM user_credentials ORDER BY username")
   })
   
@@ -559,6 +630,62 @@ server <- function(input, output, session) {
     updateCheckboxGroupInput(session, "permission_modules", selected = current_perms$module_id)
     updateCheckboxInput(session, "permission_is_admin", value = as.logical(current_admin_status$is_admin))
   })
+  
+  # Add this new observer to your server function
+  observeEvent(input$permission_is_admin, {
+    # This dynamically enables/disables the module checkboxes
+    # It is enabled when 'permission_is_admin' is FALSE
+    shinyjs::toggleState(
+      id = "permission_modules",
+      condition = !isTRUE(input$permission_is_admin)
+    )
+  }, ignoreNULL = FALSE) # ignoreNULL = FALSE makes sure it runs on app start
+  
+  # Start of ebr observeEvents
+  
+  output$current_filters_summary <- renderPrint({
+    req(input$property_filter, input$site_point_filter, input$species_filter, input$year_range)
+    
+    # Function to format multi-selection inputs neatly
+    format_selection <- function(selection) {
+      if ("All" %in% selection || is.null(selection)) {
+        "All"
+      } else {
+        paste(selection, collapse = ", ")
+      }
+    }
+    
+    cat(
+      "Property:", format_selection(input$property_filter), "\n",
+      "Site Point:", format_selection(input$site_point_filter), "\n",
+      "Species:", format_selection(input$species_filter), "\n",
+      "Time of Day:", format_selection(input$time_segment_filter), "\n",
+      "Year Range:", paste(input$year_range, collapse = " - ")
+    )
+  })
+  
+  # **NEW**: Observer for dynamic filters
+  observeEvent(input$property_filter, {
+    # This observer updates the site point choices based on the selected property
+    if (is.null(input$property_filter) || "All" %in% input$property_filter) {
+      site_choices <- c("All", unique(Detections$`Site Point`))
+      updateSelectInput(session, "site_point_filter", choices = site_choices, selected = "All")
+    } else {
+      available_sites <- Detections %>%
+        filter(Property %in% input$property_filter) %>%
+        pull(`Site Point`) %>%
+        unique()
+      
+      current_selection <- isolate(input$site_point_filter)
+      valid_selection <- intersect(current_selection, available_sites)
+      if (length(valid_selection) == 0) valid_selection <- "All"
+      
+      updateSelectInput(session, "site_point_filter",
+                        choices = c("All", available_sites),
+                        selected = valid_selection)
+    }
+  }, ignoreNULL = FALSE, ignoreInit = TRUE)
+  
   # ... (rest of server logic for plots, maps, tables, etc.)
   
   # Reactive data filtering (for plots and tables)
@@ -614,15 +741,15 @@ server <- function(input, output, session) {
       summarise(Count = n(), .groups = 'drop')
   })
   
-  # Main plot output
-  output$main_plot <- renderPlotly({
+  # --- *** NEW ***: Reactive ggplot objects to avoid code duplication ---
+  
+  # Reactive ggplot object for the main plot
+  main_ggplot_obj <- reactive({
     req(input$species_nav == "eabr", nrow(plot_data()) > 0)
     data <- plot_data()
     
-    # Create base plot using aes() with sym() for proper column name handling
     p <- ggplot(data)
     
-    # Add geom_line or geom_col based on x-axis variable
     if (input$x_var %in% c("Year", "Month")) {
       p <- p + geom_line(aes(x = !!sym(input$x_var), y = Count, color = !!sym(input$color_var), group = !!sym(input$color_var)), size = 1) +
         geom_point(aes(x = !!sym(input$x_var), y = Count, color = !!sym(input$color_var), group = !!sym(input$color_var)), size = 2)
@@ -630,21 +757,18 @@ server <- function(input, output, session) {
       p <- p + geom_col(aes(x = !!sym(input$x_var), y = Count, fill = !!sym(input$color_var)), position = "dodge")
     }
     
-    # Add faceting if selected
     if (input$facet_var != "None") {
       facet_formula <- as.formula(paste("~", "`", input$facet_var, "`", sep = ""))
       p <- p + facet_wrap(facet_formula, scales = "free")
     }
     
-    # Force integer scales for Year and Month
     if (input$x_var %in% c("Year", "Month")) {
       p <- p +
-        scale_x_continuous(breaks = function(x) seq(floor(min(x)),
-                                                    ceiling(max(x)), by = 1),
+        scale_x_continuous(breaks = function(x) seq(floor(min(x)), ceiling(max(x)), by = 1),
+                           limits = c(min(input$year_range), max(input$year_range)),
                            labels = function(x) as.integer(x))
     }
     
-    # Apply theme and labels
     p <- p +
       theme_void() +
       labs(
@@ -654,15 +778,115 @@ server <- function(input, output, session) {
         color = input$color_var,
         fill = input$color_var
       ) +
-      theme_custom
+      theme_custom + theme(axis.line = element_line()) +
+      scale_y_continuous(breaks = function(x) unique(floor(pretty(x))),
+                         limits = c(0, max(data$Count)))
     
-    # Convert to plotly
+    return(p)
+  })
+  
+  # Reactive function to create ggplot objects for the statistics plots
+  create_stats_ggplot <- function(y_var, y_lab) {
+    reactive({
+      req(input$species_nav == "eabr", nrow(filtered_data()) > 0)
+      data <- filtered_data()
+      stats_data <- data %>%
+        group_by(.data[[input$color_var]]) %>%
+        summarise(Value = {{y_var}}, .groups = 'drop')
+      
+      p <- ggplot(stats_data, aes(x = .data[[input$color_var]], y = Value, fill = .data[[input$color_var]])) +
+        geom_col() +
+        theme_minimal() +
+        labs(title = paste(y_lab, "by", input$color_var), x = input$color_var, y = y_lab) +
+        theme_custom+
+        theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none",
+              axis.title.y=element_text(angle=90, hjust=1))
+      
+      
+      if (input$color_var %in% c("Year", "Month")) {
+        p <- p + scale_x_continuous(breaks = function(x) seq(floor(min(x)), ceiling(max(x)), by = 1))
+      }
+      return(p)
+    })
+  }
+  
+  # Create the reactive ggplot objects for stats plots
+  stats1_ggplot_obj <- create_stats_ggplot(n(), "Total Detections")
+  stats2_ggplot_obj <- create_stats_ggplot(n_distinct(Species), "Number of Species")
+  
+  # --- Plot Rendering ---
+  
+  # Main plot output
+  output$main_plot <- renderPlotly({
+    p <- main_ggplot_obj()
+    req(p)
     ggplotly(p) %>%
       layout(
         hovermode = "closest",
-        legend = list(orientation = "h", y = -0.2)
+        legend = list(orientation = "h", y = -0.2),
+        showlegend = isTRUE(input$toggle_legend) # Apply legend toggle
       )
   })
+  
+  # Stats plot 1 output
+  output$stats_plot1 <- renderPlotly({
+    p <- stats1_ggplot_obj()
+    req(p)
+    ggplotly(p) %>% layout(showlegend = isTRUE(input$toggle_legend)) # Apply legend toggle
+  })
+  
+  # Stats plot 2 output
+  output$stats_plot2 <- renderPlotly({
+    p <- stats2_ggplot_obj()
+    req(p)
+    ggplotly(p) %>% layout(showlegend = isTRUE(input$toggle_legend)) # Apply legend toggle
+  })
+  
+  # Modal Dialog Logic for Enlarging Plots ---
+  
+  # Modal for Main Plot
+  observeEvent(input$popout_main_plot, {
+    showModal(modalDialog(
+      title = "Enlarged: Species Detection Analysis",
+      withSpinner(plotlyOutput("modal_main_plot", height = "80vh")),
+      size = "xl", easyClose = TRUE, footer = modalButton("Close")
+    ))
+  })
+  output$modal_main_plot <- renderPlotly({
+    p <- main_ggplot_obj()
+    req(p)
+    ggplotly(p) %>% layout(hovermode = "closest", legend = list(orientation = "h", y = -0.2), showlegend = isTRUE(input$toggle_legend))
+  })
+  
+  # Modal for Stats Plot 1
+  observeEvent(input$popout_stats1, {
+    showModal(modalDialog(
+      title = "Enlarged: Detection Counts by Variable",
+      withSpinner(plotlyOutput("modal_stats1_plot", height = "80vh")),
+      size = "xl", easyClose = TRUE, footer = modalButton("Close")
+    ))
+  })
+  output$modal_stats1_plot <- renderPlotly({
+    p <- stats1_ggplot_obj()
+    req(p)
+    ggplotly(p) %>% layout(showlegend = isTRUE(input$toggle_legend))
+  })
+  
+  # Modal for Stats Plot 2
+  observeEvent(input$popout_stats2, {
+    showModal(modalDialog(
+      title = "Enlarged: Species Diversity",
+      withSpinner(plotlyOutput("modal_stats2_plot", height = "80vh")),
+      size = "xl", easyClose = TRUE, footer = modalButton("Close")
+    ))
+  })
+  output$modal_stats2_plot <- renderPlotly({
+    p <- stats2_ggplot_obj()
+    req(p)
+    ggplotly(p) %>% layout(showlegend = isTRUE(input$toggle_legend))
+  })
+  
+  # --- Other Outputs (Map, Tables, etc.) ---
   
   # Map output
   output$site_map <- renderLeaflet({
@@ -715,32 +939,6 @@ server <- function(input, output, session) {
     req(input$species_nav == "eabr")
     DT::datatable(filtered_data(), filter = "top", options = list(pageLength = 15, scrollX = TRUE))
   })
-  
-  # Generic function for statistics plots
-  render_stats_plot <- function(y_var, y_lab) {
-    renderPlotly({
-      req(input$species_nav == "eabr", nrow(filtered_data()) > 0)
-      data <- filtered_data()
-      stats_data <- data %>%
-        group_by(.data[[input$color_var]]) %>%
-        summarise(Value = {{y_var}}, .groups = 'drop')
-      
-      p <- ggplot(stats_data, aes(x = .data[[input$color_var]], y = Value, fill = .data[[input$color_var]])) +
-        geom_col() +
-        theme_minimal() +
-        labs(title = paste(y_lab, "by", input$color_var), x = input$color_var, y = y_lab) +
-        theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none") +
-        theme_custom
-      
-      if (input$color_var %in% c("Year", "Month")) {
-        p <- p + scale_x_continuous(breaks = function(x) seq(floor(min(x)), ceiling(max(x)), by = 1))
-      }
-      ggplotly(p)
-    })
-  }
-  
-  output$stats_plot1 <- render_stats_plot(n(), "Total Detections")
-  output$stats_plot2 <- render_stats_plot(n_distinct(Species), "Number of Species")
   
   # Summary statistics
   output$summary_stats <- renderText({
