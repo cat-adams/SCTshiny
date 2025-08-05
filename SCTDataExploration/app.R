@@ -157,7 +157,7 @@ get_detections_data <- function() {
   con <- DBI::dbConnect(
     odbc::odbc(),
     Driver = "ODBC Driver 17 for SQL Server",
-    Server = "DNRCPWPF53ENDQ",
+    Server = "DNRCPWFTCTER",
     Database = "SCT",
     trusted_connection = "yes"
   )
@@ -174,7 +174,7 @@ get_wtpt_data <- function() {
   con <- DBI::dbConnect(
     odbc::odbc(),
     Driver = "ODBC Driver 17 for SQL Server",
-    Server = "DNRCPWPF53ENDQ",
+    Server = "DNRCPWFTCTER",
     Database = "SCT",
     trusted_connection = "yes"
   )
