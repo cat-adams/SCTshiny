@@ -5,8 +5,11 @@ ebr_ui <- function(id) {
   ns <- NS(id)
   
   tagList(
+      h4("Eastern Black Rail"),
+      p("This module explores Eastern Black Rail (BLRA) broadcast survey data from 2018-current in Eastern Colorado"),
+      
     accordion(
-      open = TRUE,
+      open = FALSE,
       accordion_panel(
         "Filters & Plot Configuration",
         icon = bsicons::bs_icon("filter-circle"),
@@ -39,8 +42,8 @@ ebr_ui <- function(id) {
           selectInput(ns("time_segment_filter"), "Filter by Time of Day:",
                       choices = c("All"), selected = "All", multiple = TRUE)
         ),
-        checkboxInput(ns("size_by_count"), "Size map points by detection count", value = FALSE),
-        checkboxInput(ns("toggle_legend"), "Show Plot Legends", value = TRUE)
+        checkboxInput(ns("size_by_count"), "Size map points by detection count", value = TRUE),
+        checkboxInput(ns("toggle_legend"), "Show Plot Legends", value = FALSE)
       )
     ),
     div(
@@ -60,12 +63,20 @@ ebr_ui <- function(id) {
                   withSpinner(plotlyOutput(ns("main_plot"), height = "600px"))
                 )),
       nav_panel("Statistics",
-                card(card_header("Detection Counts by Variable",
-                                 actionButton(ns("popout_stats1"), "Enlarge", icon = icon("expand"), class = "btn-sm float-end")), 
-                     withSpinner(plotlyOutput(ns("stats_plot1"), height = "500px"))),
-                card(card_header("Species Diversity",
-                                 actionButton(ns("popout_stats2"), "Enlarge", icon = icon("expand"), class = "btn-sm float-end")), 
-                     withSpinner(plotlyOutput(ns("stats_plot2"), height = "500px"))),
+                layout_column_wrap(
+                  width = 1/2,
+                  card(card_header("Detection Counts by Variable",
+                                   actionButton(ns("popout_stats1"), "Enlarge", icon = icon("expand"), class = "btn-sm float-end")), 
+                       withSpinner(plotlyOutput(ns("stats_plot1"), height = "350px"))),
+                  card(
+                    card_header("Survey & Broadcast Counts",
+                                actionButton(ns("popout_stats2"), "Enlarge", icon = icon("expand"), class = "btn-sm float-end")), 
+                    radioButtons(ns("survey_broadcast_toggle"), "View:", 
+                                 choices = c("Surveys", "Broadcasts"), 
+                                 selected = "Surveys", inline = TRUE),
+                    withSpinner(plotlyOutput(ns("stats_plot2"), height = "350px"))
+                  )
+                ),
                 card(card_header("Summary Statistics"), verbatimTextOutput(ns("summary_stats")))),
       nav_panel("Map", card(card_header("Site Point Map"), withSpinner(leafletOutput(ns("site_map"), height = "600px")))),
       nav_panel("Summary Table", card(card_header("Detection Summary"), withSpinner(DT::dataTableOutput(ns("summary_table"))))),
@@ -96,6 +107,9 @@ ebr_server <- function(id, Detections, co_counties, theme_custom) {
                   sep = "")
     })
     
+    # This line prevents the dynamic UI from being suspended when hidden
+    outputOptions(output, "year_range_ui", suspendWhenHidden = FALSE)
+    
     # --- Dynamic Filter Updates ---
     
     # This observer populates the other filter choices ONCE, after the year slider is created.
@@ -112,44 +126,35 @@ ebr_server <- function(id, Detections, co_counties, theme_custom) {
       updateSelectInput(session, "time_segment_filter", choices = time_segment_choices, selected = "All")
     }, once = TRUE) # This is crucial: it ensures this only runs one time.
     
-    # *** NEW ***: Observer for dynamically filtering site points based on property
     observeEvent(input$property_filter, {
-      # This ensures the observer doesn't run on startup before inputs are ready
       req(input$year_range) 
       
       if (is.null(input$property_filter) || "All" %in% input$property_filter) {
-        # If "All" or nothing is selected, show all site points
         available_sites <- unique(Detections$`Site Point`)
       } else {
-        # Otherwise, filter the data to get only relevant site points
         available_sites <- Detections %>%
           filter(Property %in% input$property_filter) %>%
           pull(`Site Point`) %>%
           unique()
       }
       
-      # Preserve the user's current selection if it's still valid
       current_selection <- isolate(input$site_point_filter)
       valid_selection <- intersect(current_selection, available_sites)
       
-      # If the old selection is no longer valid (e.g., user unselected its property), default to "All"
       if (length(valid_selection) == 0) {
         valid_selection <- "All"
       }
       
-      # Update the site point dropdown with the new choices and selection
       updateSelectInput(session, "site_point_filter",
                         choices = c("All", available_sites),
                         selected = valid_selection)
       
-    }, ignoreNULL = FALSE, ignoreInit = TRUE) # These options help manage the observer's behavior on startup
+    }, ignoreNULL = FALSE, ignoreInit = TRUE)
     
     # --- Reactive Data Expressions ---
     
     # Reactive data filtering (for plots and tables)
     filtered_data <- reactive({
-      # This req() now pauses execution until the dynamically rendered
-      # slider input is ready, solving the race condition.
       req(input$year_range)
       
       data <- Detections %>%
@@ -171,13 +176,28 @@ ebr_server <- function(id, Detections, co_counties, theme_custom) {
       return(data)
     })
     
+    # Reactive data that IGNORES the species filter 
+    filtered_data_for_surveys <- reactive({
+      req(input$year_range)
+      data <- Detections
+      
+      if (!"All" %in% input$property_filter && !is.null(input$property_filter) && length(input$property_filter) > 0) {
+        data <- data %>% filter(Property %in% input$property_filter)
+      }
+      if (!"All" %in% input$site_point_filter && !is.null(input$site_point_filter) && length(input$site_point_filter) > 0) {
+        data <- data %>% filter(`Site Point` %in% input$site_point_filter)
+      }
+      data <- data %>% filter(Year >= input$year_range[1] & Year <= input$year_range[2])
+      if (!"All" %in% input$time_segment_filter && !is.null(input$time_segment_filter) && length(input$time_segment_filter) > 0) {
+        data <- data %>% filter(`Time of Day` %in% input$time_segment_filter)
+      }
+      return(data)
+    })
+    
     # Reactive data specifically for the map
     map_data <- reactive({
-      data <- filtered_data() # Use the fully filtered data
-      
-      if (nrow(data) == 0) {
-        return(data.frame()) # Return empty frame if no data
-      }
+      data <- filtered_data()
+      if (nrow(data) == 0) return(data.frame())
       
       data %>%
         group_by(Property, `Site Point`, Lat, Long) %>%
@@ -252,7 +272,37 @@ ebr_server <- function(id, Detections, co_counties, theme_custom) {
     }
     
     stats1_ggplot_obj <- create_stats_ggplot(n(), "Total Detections")
-    stats2_ggplot_obj <- create_stats_ggplot(n_distinct(Species), "Number of Species")
+    
+    # --- Reactive ggplot object for Survey/Broadcast plot ---
+    survey_broadcast_plot_obj <- reactive({
+      req(nrow(filtered_data_for_surveys()) > 0, input$survey_broadcast_toggle)
+      
+      data <- filtered_data_for_surveys()
+      
+      # Determine which column to count and set the label
+      if (input$survey_broadcast_toggle == "Surveys") {
+        y_var <- sym("SurveyID")
+        y_lab <- "Number of Surveys"
+      } else {
+        y_var <- sym("SitePointBroadcastID")
+        y_lab <- "Number of Broadcasts"
+      }
+      
+      stats_data <- data %>%
+        group_by(.data[[input$color_var]]) %>%
+        summarise(Value = n_distinct(!!y_var), .groups = 'drop')
+      
+      p <- ggplot(stats_data, aes(x = .data[[input$color_var]], y = Value, fill = .data[[input$color_var]])) +
+        geom_col() +
+        theme_minimal() +
+        labs(title = paste(y_lab, "by", input$color_var), x = input$color_var, y = y_lab) +
+        theme_custom + theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+      
+      if (input$color_var %in% c("Year", "Month")) {
+        p <- p + scale_x_continuous(breaks = function(x) seq(floor(min(x)), ceiling(max(x)), by = 1))
+      }
+      return(p)
+    })
     
     # --- Outputs ---
     
@@ -276,9 +326,10 @@ ebr_server <- function(id, Detections, co_counties, theme_custom) {
       ggplotly(p) %>% layout(showlegend = isTRUE(input$toggle_legend))
     })
     
+    # Update stats_plot2 to use the new reactive plot object
     output$stats_plot2 <- renderPlotly({
-      p <- stats2_ggplot_obj(); req(p)
-      ggplotly(p) %>% layout(showlegend = isTRUE(input$toggle_legend))
+      p <- survey_broadcast_plot_obj(); req(p)
+      ggplotly(p) %>% layout(showlegend = FALSE) # Legends are redundant for this plot
     })
     
     output$site_map <- renderLeaflet({
@@ -330,12 +381,13 @@ ebr_server <- function(id, Detections, co_counties, theme_custom) {
       ggplotly(p) %>% layout(showlegend = isTRUE(input$toggle_legend))
     })
     
+    # Update the modal for stats_plot2 to use the new reactive plot object
     observeEvent(input$popout_stats2, {
-      showModal(modalDialog(title = "Enlarged: Species Diversity", withSpinner(plotlyOutput(session$ns("modal_stats2_plot"), height = "80vh")), size = "xl", easyClose = TRUE, footer = modalButton("Close")))
+      showModal(modalDialog(title = "Enlarged: Survey & Broadcast Counts", withSpinner(plotlyOutput(session$ns("modal_stats2_plot"), height = "80vh")), size = "xl", easyClose = TRUE, footer = modalButton("Close")))
     })
     output$modal_stats2_plot <- renderPlotly({
-      p <- stats2_ggplot_obj(); req(p)
-      ggplotly(p) %>% layout(showlegend = isTRUE(input$toggle_legend))
+      p <- survey_broadcast_plot_obj(); req(p)
+      ggplotly(p) %>% layout(showlegend = FALSE)
     })
   })
 }

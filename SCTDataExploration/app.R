@@ -1,4 +1,4 @@
-#### Years are not working correctly in this version#########
+
 
 # Load necessary libraries
 library(shiny)
@@ -17,9 +17,14 @@ library(shinyjs)         # For dynamic UI features like disabling inputs
 library(shinycssloaders) # For loading spinners
 library(ggthemes)        # For plot themes
 
-# --- Source the new module file ---
+# --- Source the module files ---
 source("EasternBlackRail_module.R")
 source("WTPT_module.R")
+
+# --- Define Themes ---
+# Explicitly set the Bootstrap version to 5 for both themes to avoid conflicts.
+light_theme <- bslib::bs_theme(version = 5, bootswatch = "sandstone")
+dark_theme <- bslib::bs_theme(version = 5, bootswatch = "darkly")
 
 # --- User Authentication and Database Setup ---
 
@@ -157,7 +162,7 @@ get_detections_data <- function() {
   con <- DBI::dbConnect(
     odbc::odbc(),
     Driver = "ODBC Driver 17 for SQL Server",
-    Server = "DNRCPWFTCTER",
+    Server = "DNRCPWPF53ENDQ",
     Database = "SCT",
     trusted_connection = "yes"
   )
@@ -170,11 +175,12 @@ get_detections_data <- function() {
   )
 }
 
+# WTPT Data Loading Function
 get_wtpt_data <- function() {
   con <- DBI::dbConnect(
     odbc::odbc(),
     Driver = "ODBC Driver 17 for SQL Server",
-    Server = "DNRCPWFTCTER",
+    Server = "DNRCPWPF53ENDQ",
     Database = "SCT",
     trusted_connection = "yes"
   )
@@ -228,6 +234,7 @@ theme_custom <- theme(
 
 # Load and preprocess data at app startup
 Detections <- get_detections_data()
+WTPT_data <- get_wtpt_data() # Load WTPT data once at startup
 
 # Ensure date columns are properly formatted and rename columns
 Detections$SurDate <- as.Date(Detections$SurDate)
@@ -244,70 +251,88 @@ Detections <- Detections %>%
     "Lunar Age" = "LunarAge"
   )
 
-#get WTPT data on startup
-WTPT_data<-get_wtpt_data()
 # --- UI Definition ---
-
-# The Eastern Black Rail UI is now in the module file and this object is no longer needed.
 
 # Define the UI for the new Home tab
 home_ui <- tagList(
   layout_column_wrap(
     width = 1/2,
+    # Welcome and Permissions card is now on the left
+    card(
+      card_header("Welcome to the SCT Data Explorer App"),
+      p("The SCT Data Explorer app allows you to explore data from the Species Conservation Team (SCT) database. The data in the app reflects the database, and as data is added the app will show the updates in real time."),
+      p("It is required that you have a username and password. Use the My Profile section to manage your password and view your login information and Role. Your permissions to view projects are controlled by the admin. If you wish to change your permissions, please contact an app admin. Use the side bar to navigate between the different projects you have access to."),
+      hr(),
+      p("You have access to the following modules:"),
+      uiOutput("user_permissions_ui")
+    ),
+    # My Profile card is now on the right
     card(
       card_header("My Profile"),
       uiOutput("user_profile_ui")
-    ),
-    card(
-      card_header("My Permissions"),
-      p("You have access to the following modules:"),
-      uiOutput("user_permissions_ui")
     )
   ),
-  # Admin panel - only shown to admin users
+  # Admin panel - now collapsible
   conditionalPanel(
     condition = "output.is_admin == true",
-    card(
-      card_header(
-        class = "bg-primary",
-        "Admin Panel"
-      ),
-      navset_tab(
-        nav_panel("User Management", uiOutput("admin_user_management_ui")),
-        nav_panel("Permission Management", uiOutput("admin_permission_management_ui"))
+    accordion(
+      open = FALSE, # Start closed
+      accordion_panel(
+        "Admin Panel",
+        icon = bsicons::bs_icon("person-badge"),
+        navset_tab(
+          nav_panel("User Management", uiOutput("admin_user_management_ui")),
+          nav_panel("Permission Management", uiOutput("admin_permission_management_ui"))
+        )
       )
     )
   )
 )
 
 # Main UI definition
-ui_main <- page_sidebar(
-  title = "SCT Data Explorer",
-  theme = bslib::bs_theme(bootswatch = "darkly"),
-  sidebar = sidebar(
-    title = "CPW SCT Projects",
-    navset_pill_list(
-      id = "species_nav",
-      nav_panel(title = "Home", value = "home"),
-      nav_panel(title = "Eastern Black Rail", value = "eabr"),
-      nav_panel(title = "White Tailed Ptarmigan", value = "wtp")
-    )
-  ),
-  uiOutput("main_content_ui")
-)
+ui_main <- 
+  page_sidebar(
+    title = div(
+      "SCT Data Explorer",
+      class = "bg-blue p-4 text-white", # Add background color, padding, and text color
+      style = "font-size: 1.5em; font-weight: bold;" # Increase font size
+    ),
+    # bslib::page_navbar(
+    #   header = div( # Use header for full width placement
+    #     "SCT Data Explorer",
+    #     class = "bg-blue p-4 text-white", # Add background color, padding, and text color
+    #     style = "font-size: 1.5em; font-weight: bold; width: 100%;" # Ensure full width
+    #   ),
+    theme = dark_theme, # Start with dark theme
+    sidebar = sidebar(
+      title = "CPW SCT Projects",
+      navset_pill_list(
+        id = "species_nav",
+        nav_panel(title = "User Profile", value = "home"), # Renamed tab
+        nav_panel(title = "Eastern Black Rail", value = "eabr"),
+        nav_panel(title = "White Tailed Ptarmigan", value = "wtp")
+      )
+    ),
+    uiOutput("main_content_ui")
+  )
 
 
 # Wrap the main UI with the authentication layer and add shinyjs
 ui <- secure_app(
-  tagList(
-    tags$head(
-      tags$style(HTML("
-        .modal-xl { max-width: 95%; }
-        .modal-l { max-width: 80%; }
-      "))
-    ),
-    shinyjs::useShinyjs(), # Initialize shinyjs
+  ui = tagList(
+    shinyjs::useShinyjs(),
     ui_main
+  ),
+  # This is the key fix: inject the BS5 theme dependencies into the login page header
+  head_auth = tags$head(
+    bslib::bs_theme_dependencies(dark_theme),
+    tags$style(HTML("
+        .modal-xl { max-width: 95%; }
+      .modal-l { max-width: 80%; }
+      .accordion-button {
+        color: white;
+      }
+    "))
   ),
   choose_language = FALSE
 )
@@ -316,6 +341,24 @@ ui <- secure_app(
 # --- Server Logic ---
 
 server <- function(input, output, session) {
+  
+  # # --- Theme Toggling ---
+  # observeEvent(input$dark_mode, {
+  #   # This ensures the theme is only set after a user is successfully logged in.
+  #   req(res_auth$user)
+  #   session$setCurrentTheme(
+  #     if (isTRUE(input$dark_mode)) dark_theme else light_theme
+  #   )
+  # }, ignoreInit = TRUE) # Use ignoreInit to only trigger on user interaction
+  
+  # --- Theme Toggling ---
+  observe({
+    # This ensures the theme is only set after a user is successfully logged in.
+    req(res_auth$user)
+    session$setCurrentTheme(
+      if (isTRUE(input$dark_mode)) dark_theme else light_theme
+    )
+  })
   
   # Authentication server logic
   res_auth <- secure_server(
@@ -351,10 +394,9 @@ server <- function(input, output, session) {
   })
   outputOptions(output, "is_admin", suspendWhenHidden = FALSE)
   
-  # --- Call Module servers  ---
-  # This one line replaces all the previous EABR server logic
+  # --- Call the Module Servers ---
   ebr_server("eabr_module", Detections, co_counties, theme_custom)
-  wtpt_server("wtpt_module",WTPT_data, co_counties)
+  wtpt_server("wtpt_module", WTPT_data, co_counties)
   
   # Dynamically render the main content UI based on the sidebar navigation
   output$main_content_ui <- renderUI({
@@ -369,7 +411,7 @@ server <- function(input, output, session) {
     
     switch(input$species_nav,
            "home" = home_ui,
-           "eabr" = ebr_ui("eabr_module"), # Call the module UI here
+           "eabr" = ebr_ui("eabr_module"), 
            "wtp" = wtpt_ui("wtpt_module")
     )
   })
@@ -381,6 +423,9 @@ server <- function(input, output, session) {
     tagList(
       p(strong("Username:"), res_auth$user),
       p(strong("Role:"), if (isTRUE(user_info$is_admin)) "Admin" else "Standard User"),
+      hr(),
+      # Add the theme toggle here
+      checkboxInput("dark_mode", "Enable Dark Mode", value = TRUE), # Start with dark mode checked
       hr(),
       h5("Change Password"),
       passwordInput("new_password", "New Password"),
